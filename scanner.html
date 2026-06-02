@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Y&amp;Y — JAN Nutrition Collector</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --line:#2a2f3a; --ink:#e8eaed; --mut:#9aa0aa; --ac:#e0457b; --ok:#2ecc71; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:-apple-system,Segoe UI,Roboto,sans-serif; padding:16px 14px 60px; }
+  h1 { font-size:18px; margin:0 0 2px; }
+  .sub { color:var(--mut); font-size:12px; margin:0 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:14px; }
+  #reader { width:100%; border-radius:10px; overflow:hidden; }
+  label { display:block; font-size:12px; color:var(--mut); margin:10px 0 4px; }
+  input { width:100%; padding:11px 12px; background:#0f1115; border:1px solid var(--line); border-radius:9px; color:var(--ink); font-size:16px; }
+  input:focus { outline:none; border-color:var(--ac); }
+  .row { display:flex; gap:8px; }
+  .row > div { flex:1; }
+  button { width:100%; padding:13px; border:0; border-radius:10px; font-size:15px; font-weight:600; color:#fff; background:var(--ac); margin-top:14px; }
+  button.alt { background:#272b34; color:var(--ink); }
+  .jan { font-size:22px; font-weight:700; letter-spacing:1px; }
+  .stat { display:flex; gap:14px; }
+  .stat div { flex:1; text-align:center; }
+  .stat b { display:block; font-size:22px; color:var(--ac); }
+  .stat span { font-size:11px; color:var(--mut); }
+  .item { border-bottom:1px solid var(--line); padding:9px 0; font-size:13px; }
+  .item:last-child { border:0; }
+  .item small { color:var(--mut); }
+  .toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); background:var(--ok); color:#04210f; padding:10px 18px; border-radius:30px; font-weight:600; font-size:13px; opacity:0; transition:.3s; pointer-events:none; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+  <h1>📷 JAN Nutrition Collector</h1>
+  <p class="sub">Y&amp;Y Trading LLC · build your 栄養成分表示 database</p>
+
+  <div class="card stat" id="stats">
+    <div><b id="s-total">–</b><span>products</span></div>
+    <div><b id="s-complete">–</b><span>complete</span></div>
+    <div><b id="s-verified">–</b><span>verified</span></div>
+  </div>
+
+  <div class="card">
+    <div id="reader"></div>
+    <button class="alt" id="scanBtn">Start camera scan</button>
+  </div>
+
+  <div class="card">
+    <label>JAN code</label>
+    <input id="jan" class="jan" inputmode="numeric" placeholder="4901234567894" />
+
+    <label>Product name</label>
+    <input id="name" placeholder="例: ポッキー チョコレート" />
+
+    <label>Serving size (基準量)</label>
+    <input id="serving_size" placeholder="例: 100gあたり / 1袋(50g)あたり" />
+
+    <div class="row">
+      <div><label>エネルギー kcal</label><input id="energy_kcal" inputmode="decimal" /></div>
+      <div><label>たんぱく質 g</label><input id="protein_g" inputmode="decimal" /></div>
+    </div>
+    <div class="row">
+      <div><label>脂質 g</label><input id="fat_g" inputmode="decimal" /></div>
+      <div><label>炭水化物 g</label><input id="carbs_g" inputmode="decimal" /></div>
+    </div>
+    <label>食塩相当量 g</label>
+    <input id="salt_g" inputmode="decimal" />
+
+    <button id="saveBtn">Save to database</button>
+    <button class="alt" id="clearBtn">Clear form</button>
+  </div>
+
+  <div class="card">
+    <label>Recently collected</label>
+    <div id="list"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const FIELDS = ["jan","name","serving_size","energy_kcal","protein_g","fat_g","carbs_g","salt_g"];
+
+function toast(msg, ok=true){
+  const t=$("toast"); t.textContent=msg;
+  t.style.background = ok ? "var(--ok)" : "#e0457b";
+  t.style.color = ok ? "#04210f" : "#fff";
+  t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),1800);
+}
+
+async function refresh(){
+  try{
+    const s = await (await fetch("/api/jan/stats")).json();
+    $("s-total").textContent=s.total; $("s-complete").textContent=s.complete; $("s-verified").textContent=s.verified;
+    const l = await (await fetch("/api/jan/list?limit=8")).json();
+    $("list").innerHTML = l.items.length ? l.items.map(p=>
+      `<div class="item"><b>${p.name||"(no name)"}</b><br><small>${p.jan} · ${p.energy_kcal??"–"}kcal · P${p.protein_g??"–"} F${p.fat_g??"–"} C${p.carbs_g??"–"} 塩${p.salt_g??"–"}</small></div>`
+    ).join("") : '<div class="item"><small>Nothing yet — scan your first product.</small></div>';
+  }catch(e){ /* backend not reachable */ }
+}
+
+$("saveBtn").onclick = async ()=>{
+  const jan = $("jan").value.trim();
+  if(!jan){ toast("Scan or enter a JAN first", false); return; }
+  const body = {}; FIELDS.forEach(f=> body[f]=$(f).value.trim());
+  try{
+    const r = await fetch("/api/jan/scan",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if(!r.ok) throw new Error();
+    toast("Saved ✓"); clearForm(); refresh();
+  }catch(e){ toast("Save failed", false); }
+};
+
+function clearForm(){ FIELDS.forEach(f=>$(f).value=""); }
+$("clearBtn").onclick = clearForm;
+
+// Auto-fill the form if the JAN already exists, so you can correct it.
+$("jan").addEventListener("change", async ()=>{
+  const jan=$("jan").value.trim(); if(!jan) return;
+  try{
+    const r=await fetch("/api/jan/"+encodeURIComponent(jan));
+    if(r.ok){ const p=await r.json(); ["name","serving_size","energy_kcal","protein_g","fat_g","carbs_g","salt_g"].forEach(f=>{ if(p[f]!=null)$(f).value=p[f]; }); toast("Already in DB — editing"); }
+  }catch(e){}
+});
+
+// ── Barcode scanning ──────────────────────────────────────────────────────────
+let scanner=null, scanning=false;
+$("scanBtn").onclick = async ()=>{
+  if(scanning){ await scanner.stop(); scanning=false; $("scanBtn").textContent="Start camera scan"; return; }
+  scanner = scanner || new Html5Qrcode("reader");
+  try{
+    await scanner.start({facingMode:"environment"}, {fps:10, qrbox:{width:260,height:140}},
+      (text)=>{ $("jan").value=text; $("jan").dispatchEvent(new Event("change")); toast("Scanned "+text); scanner.stop(); scanning=false; $("scanBtn").textContent="Start camera scan"; },
+      ()=>{});
+    scanning=true; $("scanBtn").textContent="Stop camera";
+  }catch(e){ toast("Camera blocked — allow access", false); }
+};
+
+refresh();
+</script>
+</body>
+</html>
